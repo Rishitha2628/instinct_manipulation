@@ -1,0 +1,157 @@
+# Parameters for the empowerment nodes (UR5 + depth camera).
+#
+# The paper calls empowerment parameter-free. On a continuous system with a
+# real sensor it is not, and these decide whether the map has any structure
+# at all. Run intrinsic_core/scripts/sweep_parameters.py before trusting a
+# result, and again after changing the arm or the camera.
+
+/**:
+  ros__parameters:
+
+    # --- arm --------------------------------------------------------------
+    joint_names:
+      - shoulder_pan_joint
+      - shoulder_lift_joint
+      - elbow_joint
+      - wrist_1_joint
+      - wrist_2_joint
+      - wrist_3_joint
+
+    # Solved with intrinsic_core's IK to put the flange 0.25 m above the
+    # workbench and about 0.18 m from the puck: close enough that the puck
+    # is in the interesting part of the landscape, far enough that the agent
+    # still has to find it. Must match config/initial_positions.yaml.
+    initial_joint_state: [-0.4011, -0.8711, 1.7028, -1.6688, -1.6304, 0.0]
+
+    # Which joints the agent may move. All six gives 3^6 = 729 actions per
+    # step, so horizon 2 is 531441 rollouts and sampling becomes very thin.
+    # The wrist barely changes where the tool IS, so drive joints 0-3.
+    active_joints: [0, 1, 2, 3]
+
+    # Radians per joint per control step. The paper's power constraint
+    # (sec 4.7.4). Raising this can INVERT the landscape, not just scale it.
+    joint_step: 0.10
+
+    # Work surface in the agent's frame, whose origin is the arm base.
+    # The arm base sits on a 0.25 m riser above a 0.75 m bench, so this
+    # is -0.25.
+    # It feeds both the contact model (the tool only pushes the puck when it
+    # is near the surface) and the depth camera's ground plane; leave it at
+    # 0.0 with a lowered bench and the agent ray-casts against a table that
+    # is not there.
+    table_height: -0.25
+
+    # Widened from the bare flange's 0.05 to cover the Robotiq 2F-85 now
+    # bolted to tool0. intrinsic_core's UR5 has no gripper, so this is the
+    # only place the model is told the tool got bigger; the real contact
+    # point is still 0.09 m further along the tool axis (robotiq_85_tcp) than
+    # the model believes. Approximate, and the reason the sim can touch the puck
+    # slightly before the agent expects to.
+    tool_radius: 0.09
+
+    # --- horizon ----------------------------------------------------------
+    # Too short: nothing reachable, map is flat and low.
+    # Too long: everything reachable, map is flat again -- the 'tragedy of
+    # the Greek gods' (sec 4.5.5). Measured usable band here is 2-3.
+    horizon: 2
+
+    # Rollouts per estimate. 81^2 = 6561 is exhaustive at horizon 2; set
+    # exhaustive_below above that to enumerate exactly instead of sampling.
+    n_sequences: 2000
+    exhaustive_below: 0
+
+    # --- camera -----------------------------------------------------------
+    # Gazebo renders 640x480; the node downsamples to this before counting.
+    # That downsampling IS the sensor model. At full resolution every
+    # rollout differs in some pixel, nothing collapses, and empowerment
+    # saturates everywhere at log2(n_sequences).
+    #
+    # Measured: below about 8x6 the puck is smaller than one pixel and its
+    # contribution drops to exactly zero -- the paper's 'cannot perceive
+    # the box' condition, arriving from sensor resolution rather than by
+    # being imposed.
+    #
+    # Oblique, matching the <pose> in worlds/empowerment_table.sdf. These are
+    # agent-frame coordinates -- world x,y with z measured from the arm base,
+    # so world z 1.35 is 0.35 here and the table at world 0.75 is -0.25.
+    # Aimed at the puck's centre height (world 0.79 = agent -0.21), giving a
+    # view direction of (0.77, 0, -0.56): 36 deg below horizontal, looking
+    # back along +x toward the arm.
+    #
+    # Change these and you must also change the world SDF pose and
+    # CAMERA_XYZ / CAMERA_PITCH in launch/gazebo_ur5.launch.py. All three
+    # describe the same camera and nothing checks that they agree.
+    camera_width: 16
+    camera_height: 12
+    camera_position: [-1.45, 0.0, 0.35]
+    camera_look_at: [-0.68, 0.0, -0.21]
+    camera_fov_deg: 50.0
+
+    # When two depth readings count as the same, in metres. Roughly the
+    # sensor's real accuracy: ~5 mm for a D435 at half a metre, degrading
+    # quadratically with range. Setting this below the true noise floor
+    # means counting sensor noise as distinguishable influence.
+    depth_resolution: 0.02
+
+    # --- perception -------------------------------------------------------
+    # The agent locates objects itself, by segmenting the depth image against
+    # the dominant plane in view. It is never told an object exists, how many
+    # there are, or where. /puck/pose is still published and still
+    # subscribed, but only to score the detector on
+    # /empowerment/detection_error.
+    #
+    # Set false to put the oracle back in the loop. That is a debugging mode
+    # for separating a perception failure from an empowerment one, not the
+    # intended way to run this.
+    detect_from_depth: true
+
+    # Metres a point must stand off the fitted plane to count as an object.
+    # The world's camera has 3 mm of gaussian noise and a real frame fits to
+    # a 2.7 mm residual, so below about 1 cm the table starts segmenting
+    # itself into speckle. Above 0.08 m nothing is ever found, because that
+    # is how tall the objects are.
+    plane_tolerance: 0.015
+
+    # Measured on a real 640x480 frame: each object covers about 3800 px, so
+    # this rejects noise without being anywhere near the real blobs.
+    min_detection_pixels: 40
+
+    # Motion nearer than this to the tool is treated as the agent's doing and
+    # not counted toward an object's independent motion. Without it a push
+    # looks like self-motion, which inverts the very distinction the drifter
+    # is there to test.
+    arm_exclusion_radius: 0.15
+
+    # --- object -----------------------------------------------------------
+    # 0.03 m = 60 mm across. Must match the cylinders in the world file: the
+    # agent's contact model and its rendered object both use this.
+    object_radius: 0.03
+    initial_object_xy: [-0.68, 0.0]
+
+    # The agent's internal model of the object.
+    # 1.0 pushable, 0.0 bolted down -- the paper's immovable-box control.
+    # Launch with bolted:=0.0 to run the control condition.
+    object_mass_factor: 1.0
+
+    # --- control loop -----------------------------------------------------
+    # ~0.6 s per exhaustive estimate on one CPU core, so keep this low.
+    rate_hz: 1.0
+
+    # The climber scores a random subset of the 81 successors each cycle
+    # rather than all of them. Noisier path, same destination.
+    candidate_actions: 24
+    climber_sequences: 600
+
+    # 0.0 = pure empowerment: finds the object, never finishes.
+    # > 0 = adds the single bit of intention empowerment cannot supply.
+    #       Carries no information about where the object is.
+    task_bonus_weight: 0.0
+    task_bonus_radius: 0.06
+
+    # Coordinates above are world x,y with z = 0 at the table top. That is
+    # the frame the analytic UR5 model works in, and launch publishes it as
+    # "arm_base". It is NOT base_link: base_link shares its origin but is
+    # yawed 180 degrees, because intrinsic_core's DH convention and
+    # ur_description's URDF disagree by that much. See BASE_YAW in
+    # launch/gazebo_ur5.launch.py.
+    frame_id: "arm_base"

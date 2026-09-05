@@ -1,0 +1,626 @@
+<?xml version="1.0" ?>
+<!--
+  Table scene for the empowerment demo.
+
+  Contains a table surface, a pushable puck, and an overhead depth camera
+  looking straight down at the puck region.
+
+  The camera is deliberately a separate static model rather than wrist
+  mounted. A wrist camera moves with the arm, so every action changes the
+  whole image through ego-motion, and the empowerment estimate saturates:
+  everything looks distinguishable because everything moved. A fixed
+  overhead view isolates what the arm actually changed in the world.
+
+  The puck's mass and friction are the analogue of the paper's
+  pushable/immovable box conditions. To run the control condition, either
+  set <static>true</static> on the puck or launch with bolted:=0.0, which
+  changes the agent's internal model to match.
+-->
+<sdf version="1.9">
+  <world name="empowerment_table">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system"
+            name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system"
+            name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system"
+            name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system"
+            name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-contact-system"
+            name="gz::sim::systems::Contact"/>
+
+    <!--
+      Lighting. There was no <scene> block here at all, so gz-sim used its
+      default ambient, which is dark, and a single shadow-casting sun did the
+      rest of the work. Worse, the old sun pointed along -x, which is
+      straight from the robot toward the bench, so the arm threw its own
+      shadow across exactly the region the camera is watching.
+
+      Now: a real ambient term, the sun turned round to +x so shadows fall
+      away from the bench, and a shadowless fill from the opposite side to
+      lift what is left. None of this touches the depth image, which is
+      geometry rather than light; it is for the GUI and for anyone filming
+      the thing.
+    -->
+    <scene>
+      <ambient>0.55 0.55 0.58 1</ambient>
+      <background>0.75 0.80 0.86 1</background>
+      <shadows>true</shadows>
+    </scene>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.85 0.85 0.82 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>0.45 0.25 -0.86</direction>
+    </light>
+
+    <light type="directional" name="fill">
+      <cast_shadows>false</cast_shadows>
+      <pose>0 0 6 0 0 0</pose>
+      <diffuse>0.45 0.45 0.50 1</diffuse>
+      <specular>0.05 0.05 0.05 1</specular>
+      <direction>-0.6 -0.35 -0.72</direction>
+    </light>
+
+    <!-- Ground -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>
+          <material>
+            <ambient>0.3 0.3 0.3 1</ambient>
+            <diffuse>0.4 0.4 0.4 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- =================================================================
+      Layout. Both tables the same height, tops at z = 0.75:
+
+        robot_table    0.50 x 0.55, centred (0.10, 0)   x from -0.15 to 0.35
+        object_table   0.60 x 0.80, centred (-0.75, 0)  x from -1.05 to -0.45
+
+      0.30 m of clear air between their near edges.
+
+      The UR5 does not bolt straight to its table. It sits on robot_riser, a
+      0.25 m block, so the arm base is at z = 1.00 while the work
+      surface stays at 0.75. That riser is not decoration, and the tables
+      cannot simply be raised to meet it:
+
+        SDF has no way to state initial joint positions, so Gazebo always
+        spawns the arm at all zeros, and a UR5 at all zeros is stretched
+        horizontally 0.817 m out with the wrist 5 mm BELOW its own base
+        plane. Bolt it level with a bench that is within 0.87 m and the arm
+        materialises inside the bench, jams, and then creeps toward its
+        target over minutes while shoving the puck around. Moving the bench
+        outside that radius would put it outside the arm's 0.85 m reach, so
+        clearance has to come from height. Putting it in the robot's mount
+        instead of the tables keeps both tables level, which is what the
+        scene should look like anyway.
+
+      The UR5 is also yawed 180 degrees so it faces the object table.
+      intrinsic_core's DH convention is 180 degrees about z from
+      ur_description's URDF: at identical joint angles the analytic model
+      puts the tool at (-0.631, -0.109) and Gazebo puts it at
+      (+0.631, +0.109). Without the yaw the simulated arm reaches away from
+      the bench while the agent plans toward it. See BASE_YAW in
+      launch/gazebo_ur5.launch.py.
+
+      The agent's frame has its origin at the arm base, so the work surface
+      is at z = -0.25 there. That is table_height in
+      config/empowerment.yaml and it must equal 0.75 minus 1.00.
+      ================================================================= -->
+    <!-- Robot table. -->
+    <model name="robot_table">
+      <static>true</static>
+      <pose>0.1 0 0.730 0 0 0</pose>
+      <link name="link">
+        <collision name="top_collision">
+          <geometry><box><size>0.5 0.55 0.04</size></box></geometry>
+          <surface><friction><ode><mu>0.4</mu><mu2>0.4</mu2></ode></friction></surface>
+        </collision>
+        <visual name="top_visual">
+          <geometry><box><size>0.5 0.55 0.04</size></box></geometry>
+          <material>
+            <ambient>0.7 0.66 0.6 1</ambient>
+            <diffuse>0.8 0.75 0.68 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg0_collision">
+          <pose>0.190 0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg0_visual">
+          <pose>0.190 0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg1_collision">
+          <pose>0.190 -0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg1_visual">
+          <pose>0.190 -0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg2_collision">
+          <pose>-0.190 0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg2_visual">
+          <pose>-0.190 0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg3_collision">
+          <pose>-0.190 -0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg3_visual">
+          <pose>-0.190 -0.215 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Mounting riser. The UR5 bolts to the top of this, at z = 1.00. -->
+    <model name="robot_riser">
+      <static>true</static>
+      <pose>0 0 0.875 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>0.16 0.16 0.25</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.16 0.16 0.25</size></box></geometry>
+          <material>
+            <ambient>0.18 0.20 0.24 1</ambient>
+            <diffuse>0.24 0.27 0.32 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Workbench. Objects live here, camera looks straight down at it. -->
+    <model name="object_table">
+      <static>true</static>
+      <pose>-0.75 0 0.730 0 0 0</pose>
+      <link name="link">
+        <collision name="top_collision">
+          <geometry><box><size>0.6 0.8 0.04</size></box></geometry>
+          <surface><friction><ode><mu>0.4</mu><mu2>0.4</mu2></ode></friction></surface>
+        </collision>
+        <visual name="top_visual">
+          <geometry><box><size>0.6 0.8 0.04</size></box></geometry>
+          <material>
+            <ambient>0.7 0.66 0.6 1</ambient>
+            <diffuse>0.8 0.75 0.68 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg0_collision">
+          <pose>0.240 0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg0_visual">
+          <pose>0.240 0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg1_collision">
+          <pose>0.240 -0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg1_visual">
+          <pose>0.240 -0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg2_collision">
+          <pose>-0.240 0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg2_visual">
+          <pose>-0.240 0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+        <collision name="leg3_collision">
+          <pose>-0.240 -0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+        </collision>
+        <visual name="leg3_visual">
+          <pose>-0.240 -0.340 -0.375 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.710</size></box></geometry>
+          <material>
+            <ambient>0.25 0.25 0.27 1</ambient>
+            <diffuse>0.32 0.32 0.35 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!--
+      The puck. 0.03 m radius, i.e. 60 mm across, and the size is chosen for
+      the GRIPPER rather than for the empowerment map. The 2F-85 opens to
+      85 mm, so an 80 mm object leaves 2.5 mm of clearance per finger against
+      a detector accurate to about 6 mm: the fingers hit the object instead of
+      straddling it, and the descent stalls short every time. 60 mm gives
+      12.5 mm a side, which the perception can actually hit.
+
+      Light and low-friction so the arm can actually displace it;
+      a heavy puck makes the empowerment contrast vanish, which is the
+      bolted-box condition arriving by the back door.
+    -->
+    <model name="puck">
+      <pose>-0.68 0.0 0.79 0 0 0</pose>
+      <link name="link">
+        <inertial>
+          <mass>0.05</mass>
+          <inertia>
+            <ixx>3.2e-5</ixx><iyy>3.2e-5</iyy><izz>4.0e-5</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry>
+          <surface>
+            <friction><ode><mu>0.25</mu><mu2>0.25</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry>
+          <material>
+            <ambient>0.7 0.15 0.15 1</ambient>
+            <diffuse>0.9 0.2 0.2 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-pose-publisher-system"
+              name="gz::sim::systems::PosePublisher">
+        <publish_link_pose>false</publish_link_pose>
+        <publish_model_pose>true</publish_model_pose>
+        <!-- false => one gz.msgs.Pose, which is what config/gz_bridge.yaml
+             maps to geometry_msgs/PoseStamped. true would emit Pose_V and
+             the bridge would silently carry nothing. -->
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>30</update_frequency>
+      </plugin>
+    </model>
+
+    <!--
+      ========================================================================
+      The contingency triad.
+
+      Three objects, deliberately IDENTICAL to the depth camera: same
+      cylinder, same 0.04 m radius, same 0.08 m height, same position in x,
+      spread only in y. The colours differ so a human can follow what is
+      happening; nothing the agent senses can tell them apart. They differ
+      only in how they respond to being touched:
+
+        puck         moves when the arm pushes it        contingent
+        fixed_block  never moves                         unresponsive
+        drifter      moves on its own, on a fixed cycle  non-contingent
+
+      That third one is the interesting object and the reason this scene
+      exists. It is a "noisy TV": something that changes constantly but not
+      because of anything the agent did. A curiosity or prediction-error
+      agent is drawn to it precisely because it is unpredictable, and gets
+      stuck watching it. Empowerment should ignore it, because the mutual
+      information between the AGENT'S ACTIONS and its state is zero: it
+      moves, but not for you.
+
+      So the experiment discriminates between two intrinsic objectives
+      rather than merely demonstrating one:
+
+                      static    drifter    puck
+        curiosity      low      HIGH       medium
+        empowerment    low      low        HIGH
+
+      Spread +-0.24 m in y. That keeps all three inside the camera's 50 deg
+      view (0.89 m across at this range) and inside the arm's 0.85 m reach
+      (0.75 m to the outer two).
+      ========================================================================
+    -->
+
+    <!--
+      Unresponsive. <static> makes it immovable by any force, which is the
+      paper's bolted-box control condition realised in the simulator rather
+      than in the agent's model. Note that bolted:=0.0 does something
+      different and complementary: it lies to the AGENT about the puck while
+      the simulator still lets it move.
+    -->
+    <model name="fixed_block">
+      <static>true</static>
+      <pose>-0.68 0.24 0.79 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry>
+          <material>
+            <ambient>0.18 0.20 0.26 1</ambient>
+            <diffuse>0.25 0.28 0.36 1</diffuse>
+          </material>
+        </visual>
+      </link>
+      <plugin filename="gz-sim-pose-publisher-system"
+              name="gz::sim::systems::PosePublisher">
+        <publish_link_pose>false</publish_link_pose>
+        <publish_model_pose>true</publish_model_pose>
+        <use_pose_vector_msg>false</use_pose_vector_msg>
+        <update_frequency>30</update_frequency>
+      </plugin>
+    </model>
+
+    <!--
+      Non-contingent motion. Slides back and forth along y on a prismatic
+      joint, driven by intrinsic_motivation_ros/drifter_driver, which
+      republishes a looping trajectory. Nothing the arm does affects it.
+
+      Built as anchor + block rather than as a free body because SDF gives
+      no way to script a pose over time: a joint plus the same
+      JointTrajectoryController already driving the arm needs no new plugin
+      and no physics of its own. The anchor is massless-looking but must
+      carry inertia, since sdformat rejects a dynamic link without it, and
+      is pinned to the world by a fixed joint so the pair does not fall.
+
+      Damping on the joint keeps it from ringing when the trajectory
+      reverses; the block rests on the table, so the controller also has to
+      overcome about 0.2 N of friction, which is nothing.
+    -->
+    <model name="drifter">
+      <!--
+        3 mm higher than the other two objects, and deliberately so. Resting
+        the block on the table while a prismatic joint also constrains it is
+        a redundant constraint: the contact stick-slips against the joint's
+        controller and the block jitters instead of sliding. Measured resting
+        on the table, it reached only +-0.06 m of its +-0.10 m setpoint and
+        showed speeds up to 2.9 m/s on a joint limited to 0.5.
+
+        The joint carries its weight, so the clearance costs nothing, and
+        3 mm is far below anything the detector distinguishes: all three
+        objects still come back at the same standoff to within a centimetre.
+      -->
+      <pose>-0.68 -0.24 0.793 0 0 0</pose>
+
+      <link name="anchor">
+        <inertial>
+          <mass>1.0</mass>
+          <inertia>
+            <ixx>1e-3</ixx><iyy>1e-3</iyy><izz>1e-3</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+      </link>
+      <joint name="anchor_to_world" type="fixed">
+        <parent>world</parent>
+        <child>anchor</child>
+      </joint>
+
+      <link name="block">
+        <inertial>
+          <mass>0.05</mass>
+          <inertia>
+            <ixx>3.2e-5</ixx><iyy>3.2e-5</iyy><izz>4.0e-5</izz>
+            <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+          </inertia>
+        </inertial>
+        <collision name="collision">
+          <geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry>
+          <surface>
+            <friction><ode><mu>0.25</mu><mu2>0.25</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><cylinder><radius>0.03</radius><length>0.08</length></cylinder></geometry>
+          <material>
+            <ambient>0.15 0.45 0.20 1</ambient>
+            <diffuse>0.20 0.65 0.28 1</diffuse>
+          </material>
+        </visual>
+      </link>
+
+      <joint name="slide" type="prismatic">
+        <parent>anchor</parent>
+        <child>block</child>
+        <axis>
+          <xyz>0 1 0</xyz>
+          <limit><lower>-0.12</lower><upper>0.12</upper><effort>50</effort><velocity>0.5</velocity></limit>
+          <dynamics><damping>3.0</damping></dynamics>
+        </axis>
+      </joint>
+
+      <!--
+        Position controller, not the JointTrajectoryController the arm uses.
+
+        The trajectory controller was the obvious choice and it does not work
+        here. Its semantics are "replace the current trajectory", and it
+        warns on every replacement; driving a continuous oscillation means
+        republishing constantly, and each replacement restarted the motion
+        against a stale start time so the joint snapped straight to a point
+        most of a cycle away. Measured: 0.196 m of travel between two samples
+        25 ms apart, which is 7.8 m/s on a joint limited to 0.5 m/s, and it
+        broke the detector's tracker into four tracks for three objects
+        because the block jumped further between frames than the association
+        gate.
+
+        A position controller takes one scalar setpoint per message and PIDs
+        toward it, so a driver publishing a sine at 20 Hz produces smooth
+        motion with no replacement semantics anywhere.
+
+        Gains are for a 0.05 kg block against 3.0 N s/m of joint damping,
+        overdamped so it tracks the setpoint without ringing. The force limit
+        does not set the speed here: the setpoint does, and it is a slow
+        sine, so there is enough authority to actually follow it rather than
+        lag at two thirds amplitude.
+      -->
+      <plugin filename="gz-sim-joint-position-controller-system"
+              name="gz::sim::systems::JointPositionController">
+        <topic>/drifter/position</topic>
+        <joint_name>slide</joint_name>
+        <p_gain>200</p_gain>
+        <i_gain>5</i_gain>
+        <d_gain>20</d_gain>
+        <i_min>-5</i_min>
+        <i_max>5</i_max>
+        <cmd_min>-20</cmd_min>
+        <cmd_max>20</cmd_max>
+      </plugin>
+
+      <!--
+        Ground truth for the drifter, for evaluating the detector only; the
+        agent never subscribes to it. Joint state rather than pose: the
+        model's root is the anchor, which never moves, and the PosePublisher
+        would have to emit both links on one topic with no way to tell them
+        apart. The slide joint's position is unambiguous, and the block's
+        world y is just the model pose's y plus that value.
+      -->
+      <plugin filename="gz-sim-joint-state-publisher-system"
+              name="gz::sim::systems::JointStatePublisher">
+        <topic>/drifter/joint_state</topic>
+      </plugin>
+    </model>
+
+    <!--
+      Overhead depth camera.
+
+      640x480 is what a RealSense D435 publishes, but the empowerment node
+      downsamples hard before use (see camera_width/camera_height in
+      config/empowerment.yaml). That downsampling IS the sensor model: at
+      full resolution every rollout differs in some pixel, nothing ever
+      collapses, and empowerment saturates everywhere.
+    -->
+    <model name="overhead_camera">
+      <static>true</static>
+      <!--
+        Oblique, not overhead. Two reasons, both load bearing.
+
+        Occlusion. Looking straight down from directly above the puck, the
+        arm covers the puck completely at exactly the configuration where
+        the agent is doing something interesting: reaching to the puck's
+        (x, y) puts the arm between camera and object, and zero pixels
+        differ between a scene with the puck and one without. Anything that
+        locates the object from the depth image therefore loses it at
+        contact. The arm approaches from +x, so the camera is placed at -x
+        and looks back toward it; the object is then in front of the arm
+        from the camera's point of view rather than behind it.
+
+        Lift is invisible from overhead. Raising the puck 0.1 m changes its
+        depth reading from 0.87 to 0.77 and makes the blob slightly larger,
+        and nothing else. From this angle a lifted object separates from the
+        table and its height above the surface is directly measurable, which
+        matters as soon as picking something up is the goal.
+
+        Aimed at the puck at (-0.68, 0, 0.79): direction (0.77, 0, -0.56),
+        so pitch is atan(0.56/0.77) = 0.6283 rad, 36 deg below horizontal,
+        yaw 0 to look back along +x. Range to target is 0.952 m, within a
+        millimetre of the 0.95 m the old overhead pose had, so depth range
+        and the footprint of one pixel at the table are unchanged and the
+        sensor-resolution numbers in the README stay comparable.
+
+        The name is now a lie. Kept anyway: it appears in the gz topic
+        names, in config/gz_bridge.yaml and in the RViz config, and renaming
+        it buys nothing.
+      -->
+      <pose>-1.45 0 1.35 0 0.6283 0</pose>
+      <link name="link">
+        <visual name="visual">
+          <geometry><box><size>0.05 0.09 0.03</size></box></geometry>
+          <material><diffuse>0.15 0.15 0.15 1</diffuse></material>
+        </visual>
+        <sensor name="depth_camera" type="depth_camera">
+          <always_on>1</always_on>
+          <!--
+            5 Hz, not 30. The empowerment node consumes frames at about 1 Hz,
+            and a 640x480 32FC1 image is 1.2 MB, so 30 Hz is 37 MB/s of
+            deserialisation into a single-threaded executor that also has to
+            run the estimator. Measured at 30 Hz the node managed 9 ticks in
+            110 s, an effective 0.08 Hz, and the resulting long gap between
+            detections let the moving object cross the tracker's association
+            gate and split into two tracks. The symptom looked like a
+            perception bug and was a throughput one.
+          -->
+          <update_rate>5</update_rate>
+          <visualize>true</visualize>
+          <topic>depth_camera</topic>
+          <!--
+            gz_frame_id overrides the default frame_id
+            (overhead_camera::link::depth_camera), which RViz cannot resolve.
+            launch/gazebo_ur5.launch.py publishes base_link -> this frame.
+
+            horizontal_fov is 50 deg, and must stay equal to camera_fov_deg
+            in config/empowerment.yaml. The analytic camera the agent
+            predicts with is only honest if it has the same optics as the one
+            it actually senses through.
+
+            Widened from 30 deg with the move to three objects: at 0.95 m
+            range, 30 deg spans 0.51 m across the image and the outer two
+            objects fall outside it. 50 deg spans 0.89 m, which covers the
+            table's 0.8 m width. The README's measured resolution figures
+            were taken at 30 deg looking straight down and do not carry over
+            unchanged; re-run scripts/sweep_parameters.py before trusting
+            any number that depends on them.
+          -->
+          <gz_frame_id>depth_camera_link</gz_frame_id>
+          <camera>
+            <horizontal_fov>0.8727</horizontal_fov>
+            <image>
+              <width>640</width>
+              <height>480</height>
+              <format>R_FLOAT32</format>
+            </image>
+            <clip>
+              <near>0.1</near>
+              <far>2.5</far>
+            </clip>
+            <noise>
+              <type>gaussian</type>
+              <mean>0.0</mean>
+              <stddev>0.003</stddev>
+            </noise>
+          </camera>
+        </sensor>
+      </link>
+    </model>
+
+  </world>
+</sdf>

@@ -1,0 +1,46 @@
+# Parameters for the 2-link planar demo (empowerment.launch.py).
+#
+# Separate from empowerment.yaml on purpose. That file is UR5-shaped: six
+# joint names, an object at (-0.50, 0) and a depth camera. Feeding it to the
+# planar nodes overrides joint_names with six UR5 joints they will never see
+# on /joint_states, and they sit waiting forever. Same parameter names, two
+# different robots -- so, two files.
+
+/**:
+  ros__parameters:
+
+    # --- arm --------------------------------------------------------------
+    link1_length: 0.30
+    link2_length: 0.25
+    joint_names: ["joint1", "joint2"]
+    contact_radius: 0.045
+
+    # Radians per joint per control step -- the paper's power constraint
+    # (sec 4.7.4). 3^2 = 9 actions per step here.
+    joint_step: 0.12
+
+    # --- horizon ----------------------------------------------------------
+    # 3 steps is 729 sequences, which reach only ~235 distinct configurations
+    # because joint increments commute: [+1,-1,0] and [0,-1,+1] end in the
+    # same place. Open-loop empowerment is capped near 7.9 bits here, not the
+    # naive log2(729) = 9.5.
+    horizon: 3
+    n_sequences: 300
+
+    # When two outcomes count as the same, in metres.
+    outcome_resolution: 0.025
+
+    # --- object -----------------------------------------------------------
+    initial_object_xy: [0.30, 0.25]
+
+    # 1.0 pushable, 0.0 bolted down -- the paper's immovable-box control.
+    object_mass_factor: 1.0
+
+    # --- control loop -----------------------------------------------------
+    rate_hz: 4.0
+
+    # 0.0 = pure empowerment: finds the object, never finishes.
+    task_bonus_weight: 0.0
+    task_bonus_radius: 0.05
+
+    frame_id: "base_link"

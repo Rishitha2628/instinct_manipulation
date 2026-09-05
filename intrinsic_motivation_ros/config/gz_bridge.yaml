@@ -1,0 +1,109 @@
+# gz <-> ROS 2 topic bridge.
+#
+# Gazebo publishes on its own transport; ros_gz_bridge copies those messages
+# onto ROS topics. Without this the empowerment node sees nothing.
+#
+# Used by launch/gazebo_ur5.launch.py via the `config_file` argument to
+# ros_gz_bridge::parameter_bridge.
+
+# --- depth camera ---------------------------------------------------------
+# The float32 depth image. This is what the empowerment node subscribes to.
+- ros_topic_name: "/camera/depth/image_raw"
+  gz_topic_name: "/depth_camera"
+  ros_type_name: "sensor_msgs/msg/Image"
+  gz_type_name: "gz.msgs.Image"
+  direction: GZ_TO_ROS
+
+# Organised point cloud from the same sensor. Not used by the node, but
+# useful in RViz to confirm the camera is actually seeing the puck.
+- ros_topic_name: "/camera/depth/points"
+  gz_topic_name: "/depth_camera/points"
+  ros_type_name: "sensor_msgs/msg/PointCloud2"
+  gz_type_name: "gz.msgs.PointCloudPacked"
+  direction: GZ_TO_ROS
+
+# gz publishes camera info on /camera_info, not /depth_camera/camera_info:
+# the sensor's <topic> only names the image stream. Confirmed with
+#   gz topic -l
+- ros_topic_name: "/camera/depth/camera_info"
+  gz_topic_name: "/camera_info"
+  ros_type_name: "sensor_msgs/msg/CameraInfo"
+  gz_type_name: "gz.msgs.CameraInfo"
+  direction: GZ_TO_ROS
+
+# --- arm ------------------------------------------------------------------
+# gz-sim's JointStatePublisher emits a whole gz.msgs.Model; the bridge pulls
+# the joint names and axis positions out of it into a JointState. The names
+# come through unprefixed (shoulder_pan_joint, ...), which is what
+# joint_names in config/empowerment.yaml expects.
+#
+# The fixed base_joint rides along in this message. Harmless -- both nodes
+# look joints up by name.
+- ros_topic_name: "/joint_states"
+  gz_topic_name: "/ur5/joint_state"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS
+
+# Position commands into the simulator. This is the ONLY ROS_TO_GZ entry, and
+# it is what makes control:=true do anything. greedy_climber publishes here
+# under exactly the topic name a real ur_robot_driver would expose, so
+# swapping in a real UR5 is a launch-file change and nothing else.
+- ros_topic_name: "/joint_trajectory_controller/joint_trajectory"
+  gz_topic_name: "/ur5/joint_trajectory"
+  ros_type_name: "trajectory_msgs/msg/JointTrajectory"
+  gz_type_name: "gz.msgs.JointTrajectory"
+  direction: ROS_TO_GZ
+
+# --- gripper -------------------------------------------------------------
+# Both fingertip contact sensors in urdf/robotiq_2f85.xacro publish to this
+# one gz topic; gz.msgs.Contacts carries a list, so both fingers arrive in
+# the same message. The sensors are serviced by the world-level Contact
+# system loaded in worlds/empowerment_table.sdf.
+- ros_topic_name: "/gripper/contacts"
+  gz_topic_name: "/gripper/contacts"
+  ros_type_name: "ros_gz_interfaces/msg/Contacts"
+  gz_type_name: "gz.msgs.Contacts"
+  direction: GZ_TO_ROS
+
+# --- object ground truth --------------------------------------------------
+# Used only for logging and for the analytic forward model's puck estimate.
+# The empowerment score itself is computed from the depth image, not from
+# this -- using ground-truth pose would skip the sensor half of the
+# actuator-to-sensor channel that empowerment is defined over.
+- ros_topic_name: "/puck/pose"
+  gz_topic_name: "/model/puck/pose"
+  ros_type_name: "geometry_msgs/msg/PoseStamped"
+  gz_type_name: "gz.msgs.Pose"
+  direction: GZ_TO_ROS
+
+# --- the other two objects ------------------------------------------------
+# Ground truth for the detector's evaluation channel, NOT for the agent.
+# fixed_block is static so its model pose is enough; the drifter's block
+# moves relative to a fixed anchor, so its slide joint carries the state.
+- ros_topic_name: "/fixed_block/pose"
+  gz_topic_name: "/model/fixed_block/pose"
+  ros_type_name: "geometry_msgs/msg/PoseStamped"
+  gz_type_name: "gz.msgs.Pose"
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/drifter/joint_states"
+  gz_topic_name: "/drifter/joint_state"
+  ros_type_name: "sensor_msgs/msg/JointState"
+  gz_type_name: "gz.msgs.Model"
+  direction: GZ_TO_ROS
+
+# Drives the drifter's back-and-forth. Published by drifter_driver, which is
+# the only thing that makes the non-contingent object non-static.
+- ros_topic_name: "/drifter/position"
+  gz_topic_name: "/drifter/position"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  direction: ROS_TO_GZ
+
+# --- clock ----------------------------------------------------------------
+- ros_topic_name: "/clock"
+  gz_topic_name: "/clock"
+  ros_type_name: "rosgraph_msgs/msg/Clock"
+  gz_type_name: "gz.msgs.Clock"
+  direction: GZ_TO_ROS

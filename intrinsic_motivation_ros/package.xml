@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>intrinsic_motivation_ros</name>
+  <version>0.1.0</version>
+  <description>
+    Intrinsic-motivation nodes for a UR5 with an overhead depth camera.
+    Publishes n-step empowerment (Salge et al. 2013, arXiv:1310.1863)
+    computed online from joint states and depth images, plus a greedy ascent
+    controller, and a Gazebo (gz-sim) scene to run them in.
+
+    No ros2_control dependency: the arm is driven by gz-sim's own
+    JointTrajectoryController. See urdf/ur5_gz.urdf.xacro.
+  </description>
+  <maintainer email="you@example.com">you</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>trajectory_msgs</exec_depend>
+  <exec_depend>ros_gz_sim</exec_depend>
+  <exec_depend>ros_gz_bridge</exec_depend>
+  <!-- ros_gz_interfaces/msg/Contacts, the gripper fingertip sensors in
+       config/gz_bridge.yaml. The bridge needs the type at runtime. -->
+  <exec_depend>ros_gz_interfaces</exec_depend>
+  <exec_depend>ur_description</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rviz2</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+
+  <test_depend>ament_copyright</test_depend>
+  <test_depend>ament_flake8</test_depend>
+  <test_depend>ament_pep257</test_depend>
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

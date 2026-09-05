@@ -1,0 +1,371 @@
+<?xml version="1.0"?>
+<!--
+  robotiq_2f85.xacro
+  ───────────────────────────────────────────────────────────────────────────
+  Self-contained Robotiq 2F-85 parallel-jaw gripper macro.
+  No external robotiq_description package required, no meshes.
+
+  Ported for Gazebo Harmonic (gz-sim 8) from a Fortress-targeted original:
+    * the <mimic> tag and the ignition-gazebo6-mimic-joint-system plugin are
+      gone. That plugin does not exist in any Gazebo, and urdf-to-sdf here
+      does not produce gz-sim's native mimic constraint either. Both knuckle
+      joints are listed in the JointTrajectoryController in ur5_gz.urdf.xacro
+      and commanded to the same angle, which needs no plugin at all.
+    * <material>Gazebo/DarkGrey</material> and friends are classic-Gazebo
+      syntax that gz-sim ignores; the URDF <material> colours already apply.
+    * the contact sensors keep their <sensor> blocks but lose the nested
+      Fortress <plugin>. gz-sim's world-level Contact system, which
+      worlds/empowerment_table.sdf already loads, services them.
+    * each sensor's <collision> reference carries a "_collision" suffix that
+      is NOT in the link's own collision name. sdformat appends that suffix
+      when it converts URDF to SDF, so a URDF collision called "foo" becomes
+      an SDF collision called "foo_collision", and a sensor that asks for
+      "foo" silently matches nothing. The sensor still loads, still appears
+      in the entity tree, still advertises its topic, and never fires. This
+      was live for a while: /gripper/contacts read zero through every grasp
+      attempt, including ones where the puck was visibly being shoved
+      160 mm across the bench, and the silence was taken as evidence that
+      the fingers were not touching it.
+    * fixed an xyz with a missing space that made a two-component origin.
+    * rebuilt the finger geometry. Both knuckle links were laid out along
+      their own +X while the knuckle joints turned about +Y, so the actuated
+      DOF changed only the fingers' pitch: the jaw gap measured a constant
+      48 mm at every angle from 0 to 0.8 rad, the two fingers pointed away
+      from each other along +X and -X rather than up the tool axis, and
+      closing swung both tips down through the palm box. The fingers now lie
+      along +Z and the knuckles turn about X, which is what the rest of the
+      file already assumed: robotiq_85_tcp was placed at
+      palm_z + prox + dist/2, an expression that only reaches the pads if
+      they run along Z.
+
+  This is a primitive-geometry approximation, not the real 2F-85 linkage:
+  one revolute knuckle per finger with the pad rigidly attached, rather than
+  the true four-bar. Good enough to see a gripper open and close and to make
+  contact; not good enough to study grasp mechanics.
+
+  Coordinate convention:
+    - Macro attaches at 'parent' link via a fixed joint.
+    - The gripper opens/closes symmetrically along the Y axis.
+    - Finger travel: 0.0 (fully open, ~85mm) → 0.8 rad (fully closed).
+
+  Actuated joints (both driven by gz-sim's JointTrajectoryController):
+    - {prefix}robotiq_85_left_knuckle_joint   ← the actuated DOF
+    - {prefix}robotiq_85_right_knuckle_joint  <- commanded to the same angle
+
+  Usage in parent xacro:
+    <xacro:include filename="robotiq_2f85.xacro"/>
+    <xacro:robotiq_2f85 parent="tool0" prefix="">
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+    </xacro:robotiq_2f85>
+  ───────────────────────────────────────────────────────────────────────────
+-->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ── Gripper geometry constants ─────────────────────────────────── -->
+  <xacro:property name="finger_mass"       value="0.05"/>
+  <xacro:property name="palm_mass"         value="0.636"/>
+
+  <!--
+    palm box: 88 x 99 x 35 mm. Wider in Y than the real 2F-85 body, because
+    the knuckle pivots sit at its Y edges and they have to be 49.5 mm out for
+    the jaws to reach the 2F-85's 85 mm opening: with the pad centre 55 mm
+    along the finger, the inner gap is 2*pivot_y - finger_w - 0.11*sin(th),
+    which is 0.085 m at th=0 and 0.006 m at th=0.8.
+  -->
+  <xacro:property name="palm_x"  value="0.0880"/>
+  <xacro:property name="palm_y"  value="0.0990"/>
+  <xacro:property name="palm_z"  value="0.0350"/>
+
+  <!-- knuckle pivots, on the palm's Y edges -->
+  <xacro:property name="pivot_y" value="${palm_y/2}"/>
+
+  <!--
+    Fingers run along +Z from the pivots and close along Y. Naming the extents
+    by function rather than by axis, because the previous prox_x/prox_y/prox_z
+    named the axes they did NOT lie on: the links were built along X while the
+    knuckle turned about Y, so the jaw gap was a constant 48 mm at every joint
+    angle and the fingers swung down into the palm instead of together.
+  -->
+  <xacro:property name="prox_len"  value="0.040"/>   <!-- proximal, along Z -->
+  <xacro:property name="dist_len"  value="0.030"/>   <!-- pad, along Z       -->
+  <xacro:property name="finger_w"  value="0.014"/>   <!-- both, along Y      -->
+  <xacro:property name="prox_t"    value="0.010"/>   <!-- proximal, along X  -->
+  <xacro:property name="dist_t"    value="0.008"/>   <!-- pad, along X       -->
+
+  <!-- joint travel limits (rad) -->
+  <xacro:property name="finger_open"   value="0.0"/>
+  <xacro:property name="finger_closed" value="0.8"/>
+
+  <!-- ── Helper: tiny inertia for light finger links ─────────────────── -->
+  <xacro:macro name="finger_inertia" params="mass l w h">
+    <inertial>
+      <mass value="${mass}"/>
+      <inertia
+        ixx="${mass*(w*w + h*h)/12}"
+        iyy="${mass*(l*l + h*h)/12}"
+        izz="${mass*(l*l + w*w)/12}"
+        ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </xacro:macro>
+
+  <!-- ── Main gripper macro ───────────────────────────────────────────── -->
+  <xacro:macro name="robotiq_2f85" params="parent prefix *origin">
+
+    <!-- ── Palm (base) link ─────────────────────────────────────────── -->
+    <link name="${prefix}robotiq_85_base_link">
+      <inertial>
+        <mass value="${palm_mass}"/>
+        <inertia
+          ixx="${palm_mass*(palm_y*palm_y + palm_z*palm_z)/12}"
+          iyy="${palm_mass*(palm_x*palm_x + palm_z*palm_z)/12}"
+          izz="${palm_mass*(palm_x*palm_x + palm_y*palm_y)/12}"
+          ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+      <visual>
+        <origin xyz="0 0 ${palm_z/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${palm_x} ${palm_y} ${palm_z}"/>
+        </geometry>
+        <material name="robotiq_dark_grey">
+          <color rgba="0.2 0.2 0.2 1"/>
+        </material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${palm_z/2}" rpy="0 0 0"/>
+        <geometry>
+          <box size="${palm_x} ${palm_y} ${palm_z}"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <!-- Fixed joint: parent tool0 → gripper palm -->
+    <joint name="${prefix}robotiq_85_base_joint" type="fixed">
+      <parent link="${parent}"/>
+      <child  link="${prefix}robotiq_85_base_link"/>
+      <xacro:insert_block name="origin"/>
+    </joint>
+
+    <!-- ────────────────────────────────────────────────────────────────
+         LEFT FINGER CHAIN
+         knuckle (revolute) → proximal → inner knuckle → fingertip
+    ──────────────────────────────────────────────────────────────────── -->
+
+    <!-- Left knuckle link -->
+    <link name="${prefix}robotiq_85_left_knuckle_link">
+      <xacro:finger_inertia mass="${finger_mass}"
+                             l="${prox_t}" w="${finger_w}" h="${prox_len}"/>
+      <visual>
+        <origin xyz="0 0 ${prox_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${prox_t} ${finger_w} ${prox_len}"/></geometry>
+        <material name="robotiq_light_grey"><color rgba="0.6 0.6 0.6 1"/></material>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${prox_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${prox_t} ${finger_w} ${prox_len}"/></geometry>
+      </collision>
+    </link>
+
+    <!-- LEFT KNUCKLE JOINT — this is the actuated DOF -->
+    <joint name="${prefix}robotiq_85_left_knuckle_joint" type="revolute">
+      <parent link="${prefix}robotiq_85_base_link"/>
+      <child  link="${prefix}robotiq_85_left_knuckle_link"/>
+      <!-- knuckle pivot sits at the top edge of the palm, +Y side.
+           Turning about +X carries the finger's +Z toward -Y, i.e. inward. -->
+      <origin xyz="0 ${pivot_y} ${palm_z}" rpy="0 0 0"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="${finger_open}" upper="${finger_closed}"
+             effort="100" velocity="2.0"/>
+      <!--
+        Coulomb friction of 0.1 N.m was larger than anything the finger's own
+        inertia asks for (m*L^2 is 1.5e-4 kg.m^2), so the joint only moved
+        when the controller's position error grew past 0.02 rad. Measured:
+        the jaws took SEVENTY SECONDS to travel 0.07 rad, and the arm lifted
+        away long before they reached the object. Whatever a real 2F-85's
+        four-bar loses to friction, it is not this.
+      -->
+      <dynamics damping="0.02" friction="0.005"/>
+    </joint>
+
+    <!-- Left fingertip (distal) link -->
+    <link name="${prefix}robotiq_85_left_finger_tip_link">
+      <xacro:finger_inertia mass="${finger_mass}"
+                             l="${dist_t}" w="${finger_w}" h="${dist_len}"/>
+      <visual>
+        <origin xyz="0 0 ${dist_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${dist_t} ${finger_w} ${dist_len}"/></geometry>
+        <material name="robotiq_rubber"><color rgba="0.15 0.15 0.15 1"/></material>
+      </visual>
+      <collision name="${prefix}robotiq_85_left_finger_tip_link_collision">
+        <origin xyz="0 0 ${dist_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${dist_t} ${finger_w} ${dist_len}"/></geometry>
+        <surface>
+          <!-- high friction rubber pads -->
+          <friction>
+            <ode><mu>1.5</mu><mu2>1.5</mu2></ode>
+          </friction>
+          <contact>
+            <ode>
+              <kp>1e6</kp>
+              <kd>1e3</kd>
+            </ode>
+          </contact>
+        </surface>
+      </collision>
+    </link>
+
+    <joint name="${prefix}robotiq_85_left_finger_tip_joint" type="fixed">
+      <parent link="${prefix}robotiq_85_left_knuckle_link"/>
+      <child  link="${prefix}robotiq_85_left_finger_tip_link"/>
+      <origin xyz="0 0 ${prox_len}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- ────────────────────────────────────────────────────────────────
+         RIGHT FINGER CHAIN  (mimic of left — 1:1 mirror)
+    ──────────────────────────────────────────────────────────────────── -->
+
+    <link name="${prefix}robotiq_85_right_knuckle_link">
+      <xacro:finger_inertia mass="${finger_mass}"
+                             l="${prox_t}" w="${finger_w}" h="${prox_len}"/>
+      <visual>
+        <origin xyz="0 0 ${prox_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${prox_t} ${finger_w} ${prox_len}"/></geometry>
+        <material name="robotiq_light_grey"/>
+      </visual>
+      <collision>
+        <origin xyz="0 0 ${prox_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${prox_t} ${finger_w} ${prox_len}"/></geometry>
+      </collision>
+    </link>
+
+    <!-- RIGHT KNUCKLE JOINT — mimic of left, opposite Y direction -->
+    <joint name="${prefix}robotiq_85_right_knuckle_joint" type="revolute">
+      <parent link="${prefix}robotiq_85_base_link"/>
+      <child  link="${prefix}robotiq_85_right_knuckle_link"/>
+      <!-- the yaw of pi makes the local +X axis point along world -X, so the
+           same positive angle carries this finger toward +Y, also inward. -->
+      <origin xyz="0 ${-pivot_y} ${palm_z}" rpy="0 0 ${pi}"/>
+      <axis xyz="1 0 0"/>
+      <limit lower="${finger_open}" upper="${finger_closed}"
+             effort="100" velocity="2.0"/>
+      <!--
+        Coulomb friction of 0.1 N.m was larger than anything the finger's own
+        inertia asks for (m*L^2 is 1.5e-4 kg.m^2), so the joint only moved
+        when the controller's position error grew past 0.02 rad. Measured:
+        the jaws took SEVENTY SECONDS to travel 0.07 rad, and the arm lifted
+        away long before they reached the object. Whatever a real 2F-85's
+        four-bar loses to friction, it is not this.
+      -->
+      <dynamics damping="0.02" friction="0.005"/>
+    </joint>
+
+    <link name="${prefix}robotiq_85_right_finger_tip_link">
+      <xacro:finger_inertia mass="${finger_mass}"
+                             l="${dist_t}" w="${finger_w}" h="${dist_len}"/>
+      <visual>
+        <origin xyz="0 0 ${dist_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${dist_t} ${finger_w} ${dist_len}"/></geometry>
+        <material name="robotiq_rubber"/>
+      </visual>
+      <collision name="${prefix}robotiq_85_right_finger_tip_link_collision">
+        <origin xyz="0 0 ${dist_len/2}" rpy="0 0 0"/>
+        <geometry><box size="${dist_t} ${finger_w} ${dist_len}"/></geometry>
+        <surface>
+          <friction>
+            <ode><mu>1.5</mu><mu2>1.5</mu2></ode>
+          </friction>
+          <contact>
+            <ode><kp>1e6</kp><kd>1e3</kd></ode>
+          </contact>
+        </surface>
+      </collision>
+    </link>
+
+    <joint name="${prefix}robotiq_85_right_finger_tip_joint" type="fixed">
+      <parent link="${prefix}robotiq_85_right_knuckle_link"/>
+      <child  link="${prefix}robotiq_85_right_finger_tip_link"/>
+      <origin xyz="0 0 ${prox_len}" rpy="0 0 0"/>
+    </joint>
+
+    <!-- ── TCP (tool centre point) — virtual frame at fingertip centre ── -->
+    <link name="${prefix}robotiq_85_tcp"/>
+    <joint name="${prefix}robotiq_85_tcp_joint" type="fixed">
+      <parent link="${prefix}robotiq_85_base_link"/>
+      <child  link="${prefix}robotiq_85_tcp"/>
+      <!-- 90 mm above the palm base: palm 35 + proximal 40 + half the 30 mm
+           pad. This expression was already written for fingers lying along
+           +Z, which is how the geometry above disagreed with itself. -->
+      <origin xyz="0 0 ${palm_z + prox_len + dist_len/2}" rpy="0 0 0"/>
+    </joint>
+
+
+    <!-- ── Gazebo material overrides + contact sensors ───────────────── -->
+    <gazebo reference="${prefix}robotiq_85_base_link">
+    </gazebo>
+    <gazebo reference="${prefix}robotiq_85_left_knuckle_link">
+    </gazebo>
+    <gazebo reference="${prefix}robotiq_85_right_knuckle_link">
+    </gazebo>
+
+    <!--
+      FIXED: Added contact sensor to left fingertip.
+      Previously there was no sensor plugin so /gripper/contacts
+      never published anything despite being in the bridge config.
+    -->
+    <gazebo reference="${prefix}robotiq_85_left_finger_tip_link">
+      <mu1>1.5</mu1>
+      <mu2>1.5</mu2>
+      <sensor name="${prefix}left_finger_contact" type="contact">
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <topic>/gripper/contacts</topic>
+        <contact>
+          <collision>${prefix}robotiq_85_left_finger_tip_link_collision_collision</collision>
+        </contact>
+      </sensor>
+    </gazebo>
+
+    <!--
+      FIXED: Added contact sensor to right fingertip.
+      Both fingers publish to the same /gripper/contacts topic —
+      the Contacts message contains a list so both are included.
+    -->
+    <gazebo reference="${prefix}robotiq_85_right_finger_tip_link">
+      <mu1>1.5</mu1>
+      <mu2>1.5</mu2>
+      <sensor name="${prefix}right_finger_contact" type="contact">
+        <always_on>true</always_on>
+        <update_rate>50</update_rate>
+        <topic>/gripper/contacts</topic>
+        <contact>
+          <collision>${prefix}robotiq_85_right_finger_tip_link_collision_collision</collision>
+        </contact>
+      </sensor>
+    </gazebo>
+
+    <!-- ── Keep the gripper's parts as real entities ─────────────────── -->
+    <!--
+      sdformat's URDF parser collapses every fixed joint by default, merging
+      the child link into its parent. Without these the palm gets absorbed
+      into wrist_3_link and the fingertips into their knuckles, so the
+      gripper still renders and still works but shows up in Gazebo's entity
+      tree as nothing but two knuckle links. Preserving the joints keeps
+      palm, both pads and their contact sensors individually selectable and
+      individually reported.
+
+      robotiq_85_tcp is deliberately NOT preserved: it has no <inertial>, and
+      sdformat drops or rejects a massless link that is not lumped. It exists
+      only as a TF frame, which robot_state_publisher provides regardless.
+    -->
+    <gazebo reference="${prefix}robotiq_85_base_joint">
+      <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+    <gazebo reference="${prefix}robotiq_85_left_finger_tip_joint">
+      <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+    <gazebo reference="${prefix}robotiq_85_right_finger_tip_joint">
+      <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+
+  </xacro:macro>
+
+</robot>

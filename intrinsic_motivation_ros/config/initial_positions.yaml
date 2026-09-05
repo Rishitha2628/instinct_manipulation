@@ -1,0 +1,11 @@
+# Starting pose of the UR5 in Gazebo.
+#
+# Must match initial_joint_state in empowerment.yaml, in the joint order
+# listed there (pan, lift, elbow, wrist_1, wrist_2, wrist_3). If these
+# disagree the agent's first few estimates describe a pose the arm is not in.
+shoulder_pan_joint: -0.4011
+shoulder_lift_joint: -0.8711
+elbow_joint: 1.7028
+wrist_1_joint: -1.6688
+wrist_2_joint: -1.6304
+wrist_3_joint: 0.0

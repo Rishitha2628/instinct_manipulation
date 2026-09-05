@@ -1,0 +1,282 @@
+<?xml version="1.0"?>
+<!--
+  UR5 for Gazebo Harmonic (gz-sim 8), without ros2_control.
+
+  Why not ur_simulation_gz: that package is not released for Humble, and the
+  Humble binaries of gz_ros2_control are built for the wrong Gazebo, so they
+  silently fail to load the controller plugin against Harmonic. Driving the
+  joints with gz-sim's own
+  JointTrajectoryController needs no extra packages and keeps the ROS-side
+  interface identical to a real arm: the climber still publishes
+  trajectory_msgs/JointTrajectory on
+  /joint_trajectory_controller/joint_trajectory, and ros_gz_bridge carries it
+  into the simulator.
+
+  Joint state comes back the same way: gz-sim's JointStatePublisher emits
+  gz.msgs.Model, which the bridge converts to sensor_msgs/JointState on
+  /joint_states.
+-->
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
+
+  <xacro:arg name="name" default="ur5"/>
+  <xacro:arg name="ur_type" default="ur5"/>
+  <xacro:arg name="tf_prefix" default=""/>
+
+  <!-- Where the base sits in the world. -->
+  <xacro:arg name="base_xyz" default="0 0 0"/>
+  <xacro:arg name="base_rpy" default="0 0 0"/>
+
+  <!-- Must match initial_joint_state in config/empowerment.yaml, otherwise
+       the agent's model and the simulator start out of sync. -->
+  <xacro:arg name="initial_positions_file"
+             default="$(find intrinsic_motivation_ros)/config/initial_positions.yaml"/>
+
+  <!-- gz topic the JointTrajectoryController listens on. -->
+  <xacro:arg name="trajectory_topic" default="/ur5/joint_trajectory"/>
+  <xacro:arg name="joint_state_topic" default="/ur5/joint_state"/>
+
+  <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
+  <xacro:include filename="$(find intrinsic_motivation_ros)/urdf/robotiq_2f85.xacro"/>
+
+  <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
+  <xacro:property name="q0" value="${xacro.load_yaml(initial_positions_file)}"/>
+
+  <link name="world"/>
+
+  <!--
+    sim_ignition is ur_description's flag name, kept from its Fortress-era
+    API; it does not select a simulator. All it does here is force_abs_paths,
+    which turns the package:// mesh URIs into absolute file:// ones so gz-sim
+    resolves them. The ros2_control tag it would otherwise add is switched
+    off by generate_ros2_control_tag.
+  -->
+  <xacro:ur_robot
+    name="$(arg name)"
+    tf_prefix="$(arg tf_prefix)"
+    parent="world"
+    joint_limits_parameters_file="$(find ur_description)/config/$(arg ur_type)/joint_limits.yaml"
+    kinematics_parameters_file="$(find ur_description)/config/$(arg ur_type)/default_kinematics.yaml"
+    physical_parameters_file="$(find ur_description)/config/$(arg ur_type)/physical_parameters.yaml"
+    visual_parameters_file="$(find ur_description)/config/$(arg ur_type)/visual_parameters.yaml"
+    initial_positions="${q0}"
+    generate_ros2_control_tag="false"
+    sim_ignition="true">
+    <origin xyz="$(arg base_xyz)" rpy="$(arg base_rpy)"/>
+  </xacro:ur_robot>
+
+  <!--
+    Robotiq 2F-85 on the flange.
+
+    Note for anyone reading the empowerment numbers: intrinsic_core's UR5
+    model has no gripper. Its tool point is the flange, and tool_radius in
+    config/empowerment.yaml is widened to roughly cover the gripper's bulk.
+    The empowerment estimate is computed entirely in that model, so it stays
+    self-consistent, but the agent does not know it is holding a gripper and
+    the real contact point is 0.09 m further along the tool axis, at
+    robotiq_85_tcp.
+  -->
+  <xacro:robotiq_2f85 parent="$(arg tf_prefix)tool0" prefix="$(arg tf_prefix)">
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </xacro:robotiq_2f85>
+
+  <!--
+    Joint state out. Default topic would be
+    /world/<world>/model/<model>/joint_state, which bakes the world name into
+    the bridge config; pin it instead.
+  -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>$(arg joint_state_topic)</topic>
+    </plugin>
+  </gazebo>
+
+  <!--
+    Position commands in. Gains are PID on joint force with no gravity
+    compensation, so the shoulder and elbow need a lot of proportional term
+    and an integral term to hold a loaded pose. cmd limits are the UR5's real
+    torque ratings (150 Nm on the first three joints, 28 Nm on the wrists) so
+    a badly conditioned command cannot launch the arm across the room.
+  -->
+  <gazebo>
+    <plugin filename="gz-sim-joint-trajectory-controller-system"
+            name="gz::sim::systems::JointTrajectoryController">
+      <topic>$(arg trajectory_topic)</topic>
+
+      <joint_name>$(arg tf_prefix)shoulder_pan_joint</joint_name>
+      <initial_position>${q0['shoulder_pan_joint']}</initial_position>
+      <position_p_gain>3000</position_p_gain>
+      <position_i_gain>150</position_i_gain>
+      <position_d_gain>250</position_d_gain>
+      <position_i_min>-100</position_i_min>
+      <position_i_max>100</position_i_max>
+      <position_cmd_min>-150</position_cmd_min>
+      <position_cmd_max>150</position_cmd_max>
+
+      <joint_name>$(arg tf_prefix)shoulder_lift_joint</joint_name>
+      <initial_position>${q0['shoulder_lift_joint']}</initial_position>
+      <position_p_gain>5000</position_p_gain>
+      <position_i_gain>300</position_i_gain>
+      <position_d_gain>400</position_d_gain>
+      <position_i_min>-150</position_i_min>
+      <position_i_max>150</position_i_max>
+      <position_cmd_min>-150</position_cmd_min>
+      <position_cmd_max>150</position_cmd_max>
+
+      <joint_name>$(arg tf_prefix)elbow_joint</joint_name>
+      <initial_position>${q0['elbow_joint']}</initial_position>
+      <position_p_gain>2000</position_p_gain>
+      <position_i_gain>150</position_i_gain>
+      <position_d_gain>150</position_d_gain>
+      <position_i_min>-100</position_i_min>
+      <position_i_max>100</position_i_max>
+      <position_cmd_min>-150</position_cmd_min>
+      <position_cmd_max>150</position_cmd_max>
+
+      <joint_name>$(arg tf_prefix)wrist_1_joint</joint_name>
+      <initial_position>${q0['wrist_1_joint']}</initial_position>
+      <!--
+        Left at 40. Raising these to 1000 to chase out the plugin's droop
+        (see the knuckles below) stopped the arm responding to a commanded
+        step at all: it sat at one pose while the climber re-issued a 0.125
+        rad swing every tick. Whatever the plugin is doing, the wrists do
+        not tolerate it, and the approach works at 6 cm steps as they are.
+      -->
+      <position_p_gain>40</position_p_gain>
+      <position_i_gain>8</position_i_gain>
+      <position_d_gain>3</position_d_gain>
+      <position_i_min>-10</position_i_min>
+      <position_i_max>10</position_i_max>
+      <position_cmd_min>-28</position_cmd_min>
+      <position_cmd_max>28</position_cmd_max>
+
+      <joint_name>$(arg tf_prefix)wrist_2_joint</joint_name>
+      <initial_position>${q0['wrist_2_joint']}</initial_position>
+      <!--
+        Left at 40. Raising these to 1000 to chase out the plugin's droop
+        (see the knuckles below) stopped the arm responding to a commanded
+        step at all: it sat at one pose while the climber re-issued a 0.125
+        rad swing every tick. Whatever the plugin is doing, the wrists do
+        not tolerate it, and the approach works at 6 cm steps as they are.
+      -->
+      <position_p_gain>40</position_p_gain>
+      <position_i_gain>8</position_i_gain>
+      <position_d_gain>3</position_d_gain>
+      <position_i_min>-10</position_i_min>
+      <position_i_max>10</position_i_max>
+      <position_cmd_min>-28</position_cmd_min>
+      <position_cmd_max>28</position_cmd_max>
+
+      <joint_name>$(arg tf_prefix)robotiq_85_left_knuckle_joint</joint_name>
+      <initial_position>0.0</initial_position>
+      <!--
+        The knuckles are the only joints here that are expected to stall
+        against something and keep pushing, so they are tuned for that
+        rather than for tracking. The old p=5 could not even overcome the
+        joint's own friction and crawled shut over seventy seconds, which
+        is why the arm kept lifting away from a jaw that had not closed.
+
+        p=1200 rather than something in the tens, and that is not a typo.
+        These two joints droop: commanded a step, they settle a constant
+        angle SHORT of it, and the shortfall scales as 1/p. Measured by
+        stepping the command 0.05 -> 0.80 in free air with nothing between
+        the pads:
+
+            p=120     short by 0.060 rad at every step
+            p=1200    short by 0.005 rad at every step
+
+        So it is proportional droop against a constant resisting torque of
+        about 7.2 N.m, which is not a physical load on a 0.1 kg finger,
+        and it is identical on both fingers, so read it as the plugin's
+        units rather than as mechanics. It is not the force clamp (1.0 and
+        20 droop the same), not the trajectory's velocities (omitting them
+        changes nothing), and not initial_position (which this plugin
+        appears to ignore entirely: the left knuckle set to 0.30 still
+        starts at 0.0596).
+
+        What it cost, at the old p=5: the shortfall swamped the whole 0.19
+        rad of travel, so the jaws never closed on anything and every grasp
+        was empty.
+
+        cmd_max is now set JUST above that 7.2, and that is the whole point.
+        The jaws are deliberately commanded past the object so that it stops
+        them and the stall becomes a tactile reading, which leaves a large
+        standing position error and pins the output at the clamp. At 20 that
+        was 286 N on a 60 mm rigid cylinder: the fingers held the puck for
+        25 s, kept squeezing, and fired it 113 m across the world. Only the
+        excess over the droop reaches the object, so 9 leaves under a fifth
+        of the squeeze while still being enough to move the joint at all.
+        Below about 7.2 the fingers stop moving entirely
+        no matter what p is.
+      -->
+      <position_p_gain>1200</position_p_gain>
+      <position_i_gain>5</position_i_gain>
+      <position_d_gain>4</position_d_gain>
+      <position_i_min>-0.5</position_i_min>
+      <position_i_max>0.5</position_i_max>
+      <position_cmd_min>-9</position_cmd_min>
+      <position_cmd_max>9</position_cmd_max>
+
+      <joint_name>$(arg tf_prefix)robotiq_85_right_knuckle_joint</joint_name>
+      <initial_position>0.0</initial_position>
+      <!--
+        The knuckles are the only joints here that are expected to stall
+        against something and keep pushing, so they are tuned for that
+        rather than for tracking. The old p=5 could not even overcome the
+        joint's own friction and crawled shut over seventy seconds, which
+        is why the arm kept lifting away from a jaw that had not closed.
+
+        p=1200 rather than something in the tens, and that is not a typo.
+        These two joints droop: commanded a step, they settle a constant
+        angle SHORT of it, and the shortfall scales as 1/p. Measured by
+        stepping the command 0.05 -> 0.80 in free air with nothing between
+        the pads:
+
+            p=120     short by 0.060 rad at every step
+            p=1200    short by 0.005 rad at every step
+
+        So it is proportional droop against a constant resisting torque of
+        about 7.2 N.m, which is not a physical load on a 0.1 kg finger,
+        and it is identical on both fingers, so read it as the plugin's
+        units rather than as mechanics. It is not the force clamp (1.0 and
+        20 droop the same), not the trajectory's velocities (omitting them
+        changes nothing), and not initial_position (which this plugin
+        appears to ignore entirely: the left knuckle set to 0.30 still
+        starts at 0.0596).
+
+        What it cost, at the old p=5: the shortfall swamped the whole 0.19
+        rad of travel, so the jaws never closed on anything and every grasp
+        was empty.
+
+        cmd_max is now set JUST above that 7.2, and that is the whole point.
+        The jaws are deliberately commanded past the object so that it stops
+        them and the stall becomes a tactile reading, which leaves a large
+        standing position error and pins the output at the clamp. At 20 that
+        was 286 N on a 60 mm rigid cylinder: the fingers held the puck for
+        25 s, kept squeezing, and fired it 113 m across the world. Only the
+        excess over the droop reaches the object, so 9 leaves under a fifth
+        of the squeeze while still being enough to move the joint at all.
+        Below about 7.2 the fingers stop moving entirely
+        no matter what p is.
+      -->
+      <position_p_gain>1200</position_p_gain>
+      <position_i_gain>5</position_i_gain>
+      <position_d_gain>4</position_d_gain>
+      <position_i_min>-0.5</position_i_min>
+      <position_i_max>0.5</position_i_max>
+      <position_cmd_min>-9</position_cmd_min>
+      <position_cmd_max>9</position_cmd_max>
+
+      <joint_name>$(arg tf_prefix)wrist_3_joint</joint_name>
+      <initial_position>${q0['wrist_3_joint']}</initial_position>
+      <position_p_gain>0.5</position_p_gain>
+      <position_i_gain>0.1</position_i_gain>
+      <position_d_gain>0.05</position_d_gain>
+      <position_i_min>-1</position_i_min>
+      <position_i_max>1</position_i_max>
+      <position_cmd_min>-28</position_cmd_min>
+      <position_cmd_max>28</position_cmd_max>
+    </plugin>
+  </gazebo>
+
+</robot>
