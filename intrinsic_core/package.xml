@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>intrinsic_core</name>
+  <version>0.2.0</version>
+  <description>
+    Empowerment estimation, UR5 kinematics, an analytic depth camera and a
+    depth-image object detector. No ROS dependency: this is the part that
+    would still be true on a different robot, in a different middleware.
+  </description>
+  <maintainer email="mr21ecb0a33@student.nitw.ac.in">Rishitha2628</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>eigen3_cmake_module</depend>
+  <depend>eigen</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

@@ -34,30 +34,30 @@ The same experiment on a 2-link planar arm with ground-truth outcomes, kept beca
 ## Layout
 
 ```
-intrinsic_core/                    pure numpy + scipy, no ROS dependency
-  empowerment.py                   estimator + Blahut-Arimoto
-  discretise.py                    when two continuous outcomes are "the same"
-  ur5.py                           UR5 DH kinematics, numerical IK, puck contact
-  sensors.py                       analytic depth camera (ray-cast, batched)
-  perception.py                    finds objects in a depth image, no oracle
-  grasp.py                         grasp as a state transition, not a script
-  ur5_grasp.py                     UR5 + object + held flag; transfer empowerment
-  batched.py                       vectorised estimator, ~4x faster
-  arm2d.py                         2-link planar arm (intuition / fast iteration)
-  scripts/run_ur5_map.py           produces the UR5 figure
-  scripts/run_arm_map.py           produces the planar figure
-  scripts/sweep_parameters.py      finds the usable parameter band
-  tests/                           58 tests, all passing
+intrinsic_core/                    C++17 + Eigen, no ROS dependency
+  src/empowerment.cpp              estimator + Blahut-Arimoto
+  src/discretise.cpp               when two continuous outcomes are "the same"
+  src/ur5.cpp                      UR5 DH kinematics, damped-least-squares IK
+  src/sensors.cpp                  analytic depth camera (ray-cast)
+  src/perception.cpp               finds objects in a depth image, no oracle
+  src/grasp.cpp                    grasp as a state transition, not a script
+  src/ur5_grasp.cpp                UR5 + object + held flag; transfer empowerment
+  src/batched.cpp                  the UR5 + camera estimator, one place
+  src/arm2d.cpp                    2-link planar arm (intuition / fast iteration)
+  tools/run_ur5_map.cpp            the UR5 map, as CSV
+  tools/run_arm_map.cpp            the planar map, as CSV
+  tools/sweep_parameters.cpp       finds the usable parameter band
+  test/                            49 gtest cases, all passing
 
-intrinsic_motivation_ros/          ROS 2 (ament_python)
-  empowerment_node.py              live empowerment from /joint_states + depth
-  drifter_driver.py                drives the non-contingent object
-  greedy_climber.py                drives the UR5 up the gradient
-  grasp_climber.py                 drives it by TRANSFER empowerment, and grasps
-  object_source.py                 depth image -> tracked objects, for the agent
-  detector_eval.py                 scores the detector against ground truth
-  empowerment_node_planar.py       2-link versions, kept for the simple demo
-  greedy_climber_planar.py
+intrinsic_motivation_ros/          ROS 2 (ament_cmake, rclcpp)
+  src/empowerment_node.cpp         live empowerment from /joint_states + depth
+  src/drifter_driver.cpp           drives the non-contingent object
+  src/greedy_climber.cpp           drives the UR5 up the gradient
+  src/grasp_climber.cpp            drives it by TRANSFER empowerment, and grasps
+  src/object_source.cpp            depth image -> tracked objects, for the agent
+  src/detector_eval.cpp            scores the detector against ground truth
+  src/empowerment_node_planar.cpp  2-link versions, kept for the simple demo
+  src/greedy_climber_planar.cpp
   worlds/empowerment_table.sdf     Gazebo world: two tables, puck, depth cam
   urdf/ur5_gz.urdf.xacro           UR5 for gz-sim, no ros2_control
   urdf/robotiq_2f85.xacro          2F-85 gripper, primitives only, no meshes
@@ -74,13 +74,22 @@ intrinsic_motivation_ros/          ROS 2 (ament_python)
 
 ### Standalone (no ROS, no Gazebo)
 
+`intrinsic_core` is a plain ament_cmake library and depends on nothing but
+Eigen, so it builds and tests without a simulator:
+
 ```bash
-cd intrinsic_core
-pip install -e .
-python3 -m pytest tests/ -v                      # 58 tests, ~30s
-python3 scripts/sweep_parameters.py              # find the usable band first
-python3 scripts/run_ur5_map.py --grid 16         # ~35s, writes the figure
+colcon build --packages-select intrinsic_core
+colcon test --packages-select intrinsic_core && colcon test-result --all
+#   49 tests, 0 failures
+
+. install/setup.bash
+ros2 run intrinsic_core sweep_parameters          # find the usable band first
+ros2 run intrinsic_core run_ur5_map --grid 16     # writes ur5_empowerment_map.csv
 ```
+
+The two figures above are rendered from those CSVs. The tools do not draw
+them: there is no plotting library in the dependency list, and the numbers
+were always the artefact rather than the picture.
 
 ### Full stack
 
@@ -102,11 +111,8 @@ sudo apt install gz-harmonic \
                  ros-$ROS_DISTRO-xacro \
                  ros-$ROS_DISTRO-robot-state-publisher
 
-# the ROS nodes import intrinsic_core, which is not a ROS package
-cd intrinsic_core && pip install -e . && cd ..
-
-# then, from a colcon workspace with this repo under src/
-colcon build --packages-select intrinsic_motivation_ros
+# both packages are ament_cmake; put the repo under a colcon workspace's src/
+colcon build
 source install/setup.bash
 
 # scene only
@@ -178,7 +184,7 @@ RESOLUTION (horizon 3)              HORIZON (resolution 0.025)
   1.000 m   +0.00  dead               5 steps  +1.90  saturated
 ```
 
-Both parameters fail on *both* sides. Too short a horizon and nothing is reachable; too long and everything is, which is §4.5.5's "tragedy of the Greek gods" — an agent that can reach anything finds nowhere interesting. Run `sweep_parameters.py` before trusting any result, and again after changing the arm.
+Both parameters fail on *both* sides. Too short a horizon and nothing is reachable; too long and everything is, which is §4.5.5's "tragedy of the Greek gods" — an agent that can reach anything finds nowhere interesting. Run `sweep_parameters` before trusting any result, and again after changing the arm.
 
 ## Things found along the way
 
@@ -271,7 +277,7 @@ With one object, empowerment alone looks almost intentional. With three, it dith
 
 Being explicit, because the two halves have very different confidence:
 
-**Verified here** — 58 passing tests. UR5 DH kinematics against known geometry, numerical IK to sub-millimetre, depth rendering, batched-vs-reference estimator agreement to 1e-9, the empowerment peak, the bolted-puck control, the occlusion effect, and the sensor-resolution threshold. Both figures are reproducible from the scripts.
+**Verified here** — 49 passing gtest cases. UR5 DH kinematics against known geometry, numerical IK to sub-millimetre, depth rendering, batched-vs-reference estimator agreement to 1e-9, the empowerment peak, the bolted-puck control, the occlusion effect, and the sensor-resolution threshold. Both figures are reproducible from the tools.
 
 **Verified in simulation** — the full stack has been brought up on ROS 2 Humble + Gazebo Harmonic (gz-sim 8), headless, and measured:
 
@@ -359,8 +365,8 @@ true: the outcome half was honest and the input half was not. The climber was
 the worse offender -- it is the node that actually *moves the arm*, and it
 never looked at the camera at all.
 
-Both now locate objects themselves, through `intrinsic_core/perception.py`
-(shared via `object_source.py`), by fitting the dominant plane in the depth
+Both now locate objects themselves, through `intrinsic_core/perception.cpp`
+(shared via `object_source.cpp`), by fitting the dominant plane in the depth
 image and segmenting whatever stands off it. The prior is deliberately weak
 and generic -- *the big flat thing is the support surface, and anything
 standing proud of it is a thing* -- the sort of innate structure a
@@ -411,7 +417,7 @@ object it needs to characterise.
 
 **Wrong answer 1: the loop is starved.** Measuring when messages *arrived* at
 a separate probe process suggested the loop ran at a median 0.54 Hz with gaps
-up to 24 s, and rclpy's single-threaded executor with a 1.2 MB depth
+up to 24 s, and a single-threaded executor with a 1.2 MB depth
 subscription is a very plausible culprit. It was wrong. Instrumenting the
 tick itself gives, on an idle machine:
 
@@ -471,7 +477,7 @@ the gap stretches, sim time and wall time stretch together (dt tracks gap),
 so the simulator is keeping real time while the 1 s timer waits four times
 too long.
 
-The remaining suspect is rclpy's single-threaded executor under roughly
+The remaining suspect is a single-threaded executor under roughly
 140 messages a second of inbound traffic, which is a known weak point, but
 that is a suspicion and not a measurement.
 
